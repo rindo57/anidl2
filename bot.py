@@ -1,141 +1,148 @@
+
 import os
 import asyncio
-import aria2p
-import subprocess
+import libtorrent as lt
+import ffmpeg
 from pyrogram import Client, filters
+from pyrogram.types import Message
 from dotenv import load_dotenv
 
+# Load environment variables
 load_dotenv()
-
 API_ID = 10247139
 API_HASH = "96b46175824223a33737657ab943fd6a"
 BOT_TOKEN = "8142248256:AAFCrdKxcUYt2Ohtw0cJJ600YwoGAWjISXA"
-INPUT_CHANNEL = -1002812861775
-OUTPUT_CHANNEL = -1002896336339
+SOURCE_CHANNEL = -1002812861775  # e.g., -100123456789
+DEST_CHANNEL = -1002896336339   # e.g., -100987654321
 
-app = Client("anime_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+# Initialize Pyrogram client
+app = Client("AnimeBot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# Initialize aria2
-aria2 = aria2p.API(
-    aria2p.Client(host="http://localhost", port=6800, secret="")
-)
+# Helper function to format file size
+def format_size(bytes_size: int) -> str:
+    if bytes_size < 1024**2:
+        return f"{bytes_size / 1024:.2f} KB"
+    elif bytes_size < 1024**3:
+        return f"{bytes_size / (1024**2):.2f} MB"
+    else:
+        return f"{bytes_size / (1024**3):.2f} GB"
 
-def start_aria2():
-    subprocess.Popen(["aria2c", "--enable-rpc", "--rpc-listen-all=false", "--rpc-allow-origin-all", "--seed-time=0", "--allow-overwrite=true", "--dir=./downloads"])
+# Helper function to format ETA
+def format_eta(seconds: int) -> str:
+    if seconds < 0:
+        return "Unknown"
+    minutes, secs = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours > 0:
+        return f"{hours}h {minutes}m {secs}s"
+    elif minutes > 0:
+        return f"{minutes}m {secs}s"
+    return f"{secs}s"
 
-start_aria2()
-
-def sizeof_fmt(num, suffix="B"):
-    for unit in ['','K','M','G','T']:
-        if abs(num) < 1024.0:
-            return f"{num:.1f}{unit}{suffix}"
-        num /= 1024.0
-    return f"{num:.1f}P{suffix}"
-
-async def update_download_status(msg, download):
-    while not download.is_complete:
-        download.update()
-        progress = (download.completed_length / download.total_length) * 100 if download.total_length else 0
-        speed = sizeof_fmt(download.download_speed) + "/s"
-        eta = f"{download.eta}s" if download.eta else "∞"
-        text = f"📥 **Downloading...**\n\n**File:** {download.name}\n**Progress:** `{progress:.2f}%`\n**Speed:** `{speed}`\n**ETA:** `{eta}`"
-        try:
-            await msg.edit(text)
-        except:
-            pass
-        await asyncio.sleep(5)
-
-async def encode_with_progress(input_path, output_path, msg):
-    cmd = [
-        "ffmpeg", "-i", input_path,
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
-        "-pix_fmt", "yuv420p10le",
-        "-c:a", "copy", output_path, "-y"
-    ]
-    print("Encoding command:", " ".join(cmd))
-
-    process = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT
-    )
-
-    duration = None
-    re_duration = re.compile(r"Duration: (\d+):(\d+):(\d+\.\d+)")
-    re_progress = re.compile(r"time=(\d+):(\d+):(\d+\.\d+).*fps=\s*(\d+).*speed=\s*([\d.]+)x")
-
-    while True:
-        line = await process.stdout.readline()
-        if not line:
-            break
-
-        line = line.decode("utf-8", errors="ignore").strip()
-        print("ffmpeg:", line)
-
-        if "Duration" in line and duration is None:
-            match = re_duration.search(line)
-            if match:
-                h, m, s = map(float, match.groups())
-                duration = int(h * 3600 + m * 60 + s)
-                print(f"Total duration: {duration} sec")
-
-        if "time=" in line and duration:
-            match = re_progress.search(line)
-            if match:
-                h, m, s, fps, speed = match.groups()
-                current = int(float(h) * 3600 + float(m) * 60 + float(s))
-                percent = (current / duration) * 100
-                remaining = duration - current
-                est_eta = remaining / float(speed) if float(speed) > 0 else "∞"
-                eta_str = f"{int(est_eta)}s" if isinstance(est_eta, float) else "∞"
-
-                await msg.edit(
-                    f"🎬 **Encoding...**\n\n"
-                    f"**Progress:** `{percent:.2f}%`\n"
-                    f"**Time:** `{current}/{duration} sec`\n"
-                    f"**FPS:** `{fps}` | **Speed:** `{speed}x`\n"
-                    f"**ETA:** `{eta_str}`"
-                )
-
-    await process.wait()
-    await msg.edit("✅ Encoding complete. Uploading...")
-
-
-
-@app.on_message(filters.chat(INPUT_CHANNEL) & filters.document)
-async def handle_torrent(client, message):
-    if not message.document.file_name.endswith(".torrent"):
-        return
-
-    status = await message.reply("📥 Downloading torrent...")
-    torrent_path = await message.download()
-
-    download = aria2.add_torrent(torrent_path, options={"dir": "./downloads"})
-
-    await update_download_status(status, download)
-    total_size = sum(f.length for f in download.files if str(f.path).lower().endswith((".mkv", ".mp4", ".avi")))
-    await status.edit(
-        f"✅ Download complete.\n\n"
-        f"📁 Total video file size: `{sizeof_fmt(total_size)}`\n"
-        f"🎬 Preparing for encoding..."
-    )
-
-    await status.edit("✅ Download complete. Starting encoding...")
+# Function to download torrent with status updates
+async def download_torrent(client: Client, message: Message, torrent_url: str, download_path: str) -> str:
+    ses = lt.session()
+    params = lt.parse_magnet_uri(torrent_url) if torrent_url.startswith("magnet:") else lt.add_torrent_params(lt.torrent_info(torrent_url))
+    params.save_path = download_path
+    handle = ses.add_torrent(params)
     
-    for file in download.files:
-        input_file = str(file.path)
-        if not input_file.lower().endswith((".mkv", ".mp4", ".avi")):
-            continue
+    status_message = await client.send_message(SOURCE_CHANNEL, "Starting torrent download...")
+    
+    while not handle.is_seed():
+        s = handle.status()
+        progress = s.progress * 100
+        speed = s.download_rate / 1024  # KB/s
+        downloaded = s.total_done
+        total_size = s.total_wanted
+        eta = (total_size - downloaded) / s.download_rate if s.download_rate > 0 else -1
+        
+        status_text = (
+            f"**Download Status**\n"
+            f"Progress: {progress:.2f}%\n"
+            f"Speed: {speed:.2f} KB/s\n"
+            f"Downloaded: {format_size(downloaded)} / {format_size(total_size)}\n"
+            f"ETA: {format_eta(eta)}"
+        )
+        await client.edit_message_text(SOURCE_CHANNEL, status_message.id, status_text)
+        await asyncio.sleep(10)  # Update every 10 seconds
+    
+    # Find the largest video file
+    files = handle.torrent_file().files()
+    video_extensions = (".mkv", ".mp4", ".avi")
+    for i in range(files.num_files()):
+        file_path = os.path.join(download_path, files.file_path(i))
+        if file_path.endswith(video_extensions):
+            await client.edit_message_text(SOURCE_CHANNEL, status_message.id, "Download complete!")
+            return file_path
+    return None
 
-        output_file = input_file.rsplit(".", 1)[0] + "_x265.mkv"
-        try:
-            await encode_with_progress(input_file, output_file, status)
-            await status.edit(f"📤 Uploading {os.path.basename(output_file)}...")
-            await client.send_document(OUTPUT_CHANNEL, document=output_file)
-        except Exception as e:
-            await status.edit(f"❌ Encoding failed:\n`{e}`")
-    await status.edit("✅ All done.")
-    os.remove(torrent_path)
+# Function to encode video with progress updates
+async def encode_video(client: Client, message: Message, input_path: str, output_path: str) -> bool:
+    status_message = await client.send_message(SOURCE_CHANNEL, "Starting video encoding...")
+    
+    try:
+        def progress_callback(stream, chunk, bytes_remaining):
+            total_size = os.path.getsize(input_path)
+            progress = ((total_size - bytes_remaining) / total_size) * 100
+            asyncio.create_task(
+                client.edit_message_text(
+                    SOURCE_CHANNEL,
+                    status_message.id,
+                    f"**Encoding Status**\nProgress: {progress:.2f}%"
+                )
+            )
+        
+        stream = ffmpeg.input(input_path)
+        stream = ffmpeg.output(stream, output_path, vcodec="libx264", crf=28, preset="veryfast", acodec="aac", ab="192k")
+        ffmpeg.run_async(stream, pipe=True, progress=progress_callback)
+        await asyncio.sleep(10)  # Allow some time for encoding to start
+        return True
+    except ffmpeg.Error:
+        await client.edit_message_text(SOURCE_CHANNEL, status_message.id, "Encoding failed!")
+        return False
 
-app.run()
+# Handle torrent links in source channel
+@app.on_message(filters.chat(SOURCE_CHANNEL) & filters.document)
+async def handle_torrent(client: Client, message: Message):
+    if message.document.mime_type != "application/x-bittorrent":
+        await message.reply("Invalid file. Please send a .torrent file.")
+        return
+    
+    torrent_url = message.document.file_name
+    download_path = "./downloads"
+    os.makedirs(download_path, exist_ok=True)
+    
+    # Download torrent
+    video_file = await download_torrent(client, message, torrent_url, download_path)
+    if not video_file:
+        await message.reply("No video file found in torrent.")
+        return
+    
+    # Encode video
+    output_file = video_file.replace(".mkv", "_hevc.mkv").replace(".mp4", "_hevc.mkv")
+    success = await encode_video(client, message, video_file, output_file)
+    if not success:
+        await message.reply("Encoding failed.")
+        return
+    
+    # Upload to destination channel
+    await client.send_video(
+        chat_id=DEST_CHANNEL,
+        video=output_file,
+        caption=f"Encoded: {os.path.basename(output_file)}",
+        progress=lambda current, total: print(f"Upload: {current / total * 100:.2f}%")
+    )
+    
+    # Clean up
+    os.remove(video_file)
+    os.remove(output_file)
+    await message.reply("Processing complete! File uploaded to destination channel.")
 
+# Run the bot
+async def main():
+    await app.start()
+    print("Bot is running...")
+    await asyncio.Event().wait()
+
+if __name__ == "__main__":
+    asyncio.run(main())
