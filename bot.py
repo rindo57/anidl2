@@ -2,6 +2,7 @@ import os
 import logging
 import subprocess
 from pyrogram import Client, filters
+from pyrogram import idle
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 import requests
 import qbittorrentapi
