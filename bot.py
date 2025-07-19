@@ -62,10 +62,14 @@ class AnimeEncoderBot:
         self.app.on_message(filters.chat(SOURCE_CHANNEL))(self.handle_torrent_link)
         self.app.on_callback_query()(self.handle_callback_query)
     
-    async def start(self):
+    async def run(self):
         await self.app.start()
-        logger.info("Bot started...")
-        await self.app.idle()
+        logger.info("Bot started and running...")
+        
+        # Keep the bot running
+        await idle()
+        
+        await self.app.stop()
     
     async def handle_torrent_link(self, client: Client, message: Message):
         text = message.text or message.caption
