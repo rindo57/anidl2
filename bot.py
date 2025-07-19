@@ -15,29 +15,69 @@ OUTPUT_CHANNEL = -1002896336339
 
 app = Client("anime_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# Initialize aria2 RPC interface
+# Initialize aria2
 aria2 = aria2p.API(
     aria2p.Client(host="http://localhost", port=6800, secret="")
 )
 
-# Make sure aria2c is running in daemon mode
 def start_aria2():
-    subprocess.Popen(["aria2c", "--enable-rpc", "--rpc-listen-all=false", "--rpc-allow-origin-all"])
+    subprocess.Popen(["aria2c", "--enable-rpc", "--rpc-listen-all=false", "--rpc-allow-origin-all", "--dir=./downloads"])
 
 start_aria2()
 
-# HEVC 10-bit encoding using ffmpeg
-def encode_to_hevc(input_path, output_path):
-    command = [
+def sizeof_fmt(num, suffix="B"):
+    for unit in ['','K','M','G','T']:
+        if abs(num) < 1024.0:
+            return f"{num:.1f}{unit}{suffix}"
+        num /= 1024.0
+    return f"{num:.1f}P{suffix}"
+
+async def update_download_status(msg, download):
+    while not download.is_complete:
+        download.update()
+        progress = (download.completed_length / download.total_length) * 100 if download.total_length else 0
+        speed = sizeof_fmt(download.download_speed) + "/s"
+        eta = f"{download.eta}s" if download.eta else "∞"
+        text = f"📥 **Downloading...**\n\n**File:** {download.name}\n**Progress:** `{progress:.2f}%`\n**Speed:** `{speed}`\n**ETA:** `{eta}`"
+        try:
+            await msg.edit(text)
+        except:
+            pass
+        await asyncio.sleep(5)
+
+async def encode_with_progress(input_path, output_path, msg):
+    cmd = [
         "ffmpeg", "-i", input_path,
         "-c:v", "libx265", "-preset", "medium", "-crf", "28",
         "-pix_fmt", "yuv420p10le",
-        "-c:a", "copy",  # Optional: copy original audio
-        output_path
+        "-c:a", "copy", output_path, "-y"
     ]
-    subprocess.run(command, check=True)
+    process = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    
+    duration = None
+    pattern_time = "time="
+    while True:
+        line = await process.stdout.readline()
+        if not line:
+            break
+        line = line.decode("utf-8", errors="ignore")
+        if "Duration" in line:
+            try:
+                h, m, s = line.split("Duration:")[1].split(",")[0].strip().split(":")
+                duration = int(float(h) * 3600 + float(m) * 60 + float(s))
+            except:
+                pass
+        elif "time=" in line and duration:
+            try:
+                time_str = line.split("time=")[1].split(" ")[0]
+                h, m, s = map(float, time_str.split(":"))
+                seconds = int(h * 3600 + m * 60 + s)
+                percent = (seconds / duration) * 100
+                await msg.edit(f"🎬 **Encoding...**\n\n**Progress:** `{percent:.2f}%`\n**Time:** `{int(seconds)}/{duration} sec`")
+            except:
+                pass
+    await process.wait()
 
-# Watch for torrent files in the input channel
 @app.on_message(filters.chat(INPUT_CHANNEL) & filters.document)
 async def handle_torrent(client, message):
     if not message.document.file_name.endswith(".torrent"):
@@ -46,30 +86,24 @@ async def handle_torrent(client, message):
     status = await message.reply("📥 Downloading torrent...")
     torrent_path = await message.download()
 
-    # Add torrent to aria2
     download = aria2.add_torrent(torrent_path, options={"dir": "./downloads"})
 
-    # Wait for download
-    while not download.is_complete:
-        await asyncio.sleep(5)
-        download.update()
+    await update_download_status(status, download)
 
     await status.edit("✅ Download complete. Starting encoding...")
 
-    # Encode all video files
     for file in download.files:
         input_file = file.path
         if not input_file.lower().endswith((".mkv", ".mp4", ".avi")):
             continue
         output_file = input_file.rsplit(".", 1)[0] + "_x265.mkv"
         try:
-            encode_to_hevc(input_file, output_file)
+            await encode_with_progress(input_file, output_file, status)
             await status.edit(f"📤 Uploading {os.path.basename(output_file)}...")
             await client.send_document(OUTPUT_CHANNEL, document=output_file)
         except Exception as e:
-            await message.reply(f"❌ Encoding failed: {e}")
-
-    await status.edit("✅ All files uploaded.")
+            await status.edit(f"❌ Encoding failed:\n`{e}`")
+    await status.edit("✅ All done.")
     os.remove(torrent_path)
 
 app.run()
