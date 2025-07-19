@@ -91,11 +91,12 @@ async def handle_torrent(client, message):
     await update_download_status(status, download)
 
     await status.edit("✅ Download complete. Starting encoding...")
-
+    
     for file in download.files:
-        input_file = file.path
+        input_file = str(file.path)
         if not input_file.lower().endswith((".mkv", ".mp4", ".avi")):
             continue
+
         output_file = input_file.rsplit(".", 1)[0] + "_x265.mkv"
         try:
             await encode_with_progress(input_file, output_file, status)
