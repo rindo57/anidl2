@@ -401,4 +401,15 @@ class AnimeEncoderBot:
 
 if __name__ == "__main__":
     bot = AnimeEncoderBot()
-    asyncio.run(bot.start())
+    
+    try:
+        # For Python 3.7+ use:
+        asyncio.run(bot.run())
+        
+        # Alternatively for older Python versions:
+        # loop = asyncio.get_event_loop()
+        # loop.run_until_complete(bot.run())
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
+    except Exception as e:
+        logger.error(f"Bot crashed: {e}")
