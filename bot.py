@@ -104,9 +104,9 @@ async def encode_video(client: Client, message: Message, input_path: str, output
 # Handle torrent links in source channel
 @app.on_message(filters.chat(SOURCE_CHANNEL) & filters.document)
 async def handle_torrent(client: Client, message: Message):
-    if message.document.mime_type != "application/x-bittorrent":
-        await message.reply("Invalid file. Please send a .torrent file.")
-        return
+    #if message.document.mime_type != "application/x-bittorrent":
+  #      await message.reply("Invalid file. Please send a .torrent file.")
+   #     return
     
     torrent_url = message.document.file_name
     download_path = "./downloads"
