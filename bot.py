@@ -21,7 +21,7 @@ aria2 = aria2p.API(
 )
 
 def start_aria2():
-    subprocess.Popen(["aria2c", "--enable-rpc", "--rpc-listen-all=false", "--rpc-allow-origin-all", "--dir=./downloads"])
+    subprocess.Popen(["aria2c", "--enable-rpc", "--rpc-listen-all=false", "--rpc-allow-origin-all", "--seed-time=0", "--dir=./downloads"])
 
 start_aria2()
 
@@ -48,7 +48,7 @@ async def update_download_status(msg, download):
 async def encode_with_progress(input_path, output_path, msg):
     cmd = [
         "ffmpeg", "-i", input_path,
-        "-c:v", "libx265", "-preset", "medium", "-crf", "28",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
         "-pix_fmt", "yuv420p10le",
         "-c:a", "copy", output_path, "-y"
     ]
