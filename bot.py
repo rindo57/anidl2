@@ -48,35 +48,45 @@ async def update_download_status(msg, download):
 async def encode_with_progress(input_path, output_path, msg):
     cmd = [
         "ffmpeg", "-i", input_path,
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
+        "-c:v", "libx265", "-preset", "medium", "-crf", "28",
         "-pix_fmt", "yuv420p10le",
         "-c:a", "copy", output_path, "-y"
     ]
-    process = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    
+    print("Running command:", " ".join(cmd))  # Log command
+
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT
+    )
+
     duration = None
-    pattern_time = "time="
     while True:
         line = await process.stdout.readline()
         if not line:
             break
         line = line.decode("utf-8", errors="ignore")
+        print("ffmpeg:", line.strip())  # 👈 Output log
+
         if "Duration" in line:
             try:
                 h, m, s = line.split("Duration:")[1].split(",")[0].strip().split(":")
                 duration = int(float(h) * 3600 + float(m) * 60 + float(s))
-            except:
-                pass
+            except Exception as e:
+                print("Duration parse error:", e)
+
         elif "time=" in line and duration:
             try:
                 time_str = line.split("time=")[1].split(" ")[0]
                 h, m, s = map(float, time_str.split(":"))
                 seconds = int(h * 3600 + m * 60 + s)
                 percent = (seconds / duration) * 100
-                await msg.edit(f"🎬 **Encoding...**\n\n**Progress:** `{percent:.2f}%`\n**Time:** `{int(seconds)}/{duration} sec`")
-            except:
-                pass
+                await msg.edit(f"🎬 **Encoding...**\n**Progress:** `{percent:.2f}%`\n**Time:** `{seconds}/{duration} sec`")
+            except Exception as e:
+                print("Encoding progress parse error:", e)
+
     await process.wait()
+
 
 @app.on_message(filters.chat(INPUT_CHANNEL) & filters.document)
 async def handle_torrent(client, message):
