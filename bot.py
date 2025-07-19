@@ -48,11 +48,11 @@ async def update_download_status(msg, download):
 async def encode_with_progress(input_path, output_path, msg):
     cmd = [
         "ffmpeg", "-i", input_path,
-        "-c:v", "libx265", "-preset", "medium", "-crf", "28",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
         "-pix_fmt", "yuv420p10le",
         "-c:a", "copy", output_path, "-y"
     ]
-    print("Running command:", " ".join(cmd))  # Log command
+    print("Encoding command:", " ".join(cmd))
 
     process = await asyncio.create_subprocess_exec(
         *cmd,
@@ -61,31 +61,45 @@ async def encode_with_progress(input_path, output_path, msg):
     )
 
     duration = None
+    re_duration = re.compile(r"Duration: (\d+):(\d+):(\d+\.\d+)")
+    re_progress = re.compile(r"time=(\d+):(\d+):(\d+\.\d+).*fps=\s*(\d+).*speed=\s*([\d.]+)x")
+
     while True:
         line = await process.stdout.readline()
         if not line:
             break
-        line = line.decode("utf-8", errors="ignore")
-        print("ffmpeg:", line.strip())  # 👈 Output log
 
-        if "Duration" in line:
-            try:
-                h, m, s = line.split("Duration:")[1].split(",")[0].strip().split(":")
-                duration = int(float(h) * 3600 + float(m) * 60 + float(s))
-            except Exception as e:
-                print("Duration parse error:", e)
+        line = line.decode("utf-8", errors="ignore").strip()
+        print("ffmpeg:", line)
 
-        elif "time=" in line and duration:
-            try:
-                time_str = line.split("time=")[1].split(" ")[0]
-                h, m, s = map(float, time_str.split(":"))
-                seconds = int(h * 3600 + m * 60 + s)
-                percent = (seconds / duration) * 100
-                await msg.edit(f"🎬 **Encoding...**\n**Progress:** `{percent:.2f}%`\n**Time:** `{seconds}/{duration} sec`")
-            except Exception as e:
-                print("Encoding progress parse error:", e)
+        if "Duration" in line and duration is None:
+            match = re_duration.search(line)
+            if match:
+                h, m, s = map(float, match.groups())
+                duration = int(h * 3600 + m * 60 + s)
+                print(f"Total duration: {duration} sec")
+
+        if "time=" in line and duration:
+            match = re_progress.search(line)
+            if match:
+                h, m, s, fps, speed = match.groups()
+                current = int(float(h) * 3600 + float(m) * 60 + float(s))
+                percent = (current / duration) * 100
+                remaining = duration - current
+                est_eta = remaining / float(speed) if float(speed) > 0 else "∞"
+                eta_str = f"{int(est_eta)}s" if isinstance(est_eta, float) else "∞"
+
+                await msg.edit(
+                    f"🎬 **Encoding...**\n\n"
+                    f"**Progress:** `{percent:.2f}%`\n"
+                    f"**Time:** `{current}/{duration} sec`\n"
+                    f"**FPS:** `{fps}` | **Speed:** `{speed}x`\n"
+                    f"**ETA:** `{eta_str}`"
+                )
 
     await process.wait()
+    await msg.edit("✅ Encoding complete. Uploading...")
+
 
 
 @app.on_message(filters.chat(INPUT_CHANNEL) & filters.document)
@@ -99,6 +113,12 @@ async def handle_torrent(client, message):
     download = aria2.add_torrent(torrent_path, options={"dir": "./downloads"})
 
     await update_download_status(status, download)
+    total_size = sum(f.length for f in download.files if str(f.path).lower().endswith((".mkv", ".mp4", ".avi")))
+    await status.edit(
+        f"✅ Download complete.\n\n"
+        f"📁 Total video file size: `{sizeof_fmt(total_size)}`\n"
+        f"🎬 Preparing for encoding..."
+    )
 
     await status.edit("✅ Download complete. Starting encoding...")
     
