@@ -71,10 +71,12 @@ class AnimeEncoderBot:
         await idle()
         
         await self.app.stop()
-    
     async def handle_torrent_link(self, client: Client, message: Message):
+        logger.info(f"Received message: {message}")
         text = message.text or message.caption
+        logger.info(f"Extracted text: {text}")
         if text and text.endswith('.torrent'):
+            logger.info("Torrent link detected, processing...")
             logger.info(f"Received torrent link: {text}")
             task_id = f"task_{int(time.time())}"
             self.active_tasks[task_id] = {
@@ -400,6 +402,10 @@ class AnimeEncoderBot:
         
         await callback_query.answer()
 
+@self.app.on_message(filters.command("start"))
+async def test_handler(client, message):
+    await message.reply("Bot is working!")
+    
 if __name__ == "__main__":
     bot = AnimeEncoderBot()
     
