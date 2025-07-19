@@ -21,7 +21,7 @@ aria2 = aria2p.API(
 )
 
 def start_aria2():
-    subprocess.Popen(["aria2c", "--enable-rpc", "--rpc-listen-all=false", "--rpc-allow-origin-all", "--seed-time=0", "--dir=./downloads"])
+    subprocess.Popen(["aria2c", "--enable-rpc", "--rpc-listen-all=false", "--rpc-allow-origin-all", "--seed-time=0", "--allow-overwrite=true", "--dir=./downloads"])
 
 start_aria2()
 
